@@ -97,6 +97,9 @@ td:first-child{text-align:left;color:var(--txt)}
 .scard .sd{font-size:10px;color:var(--mut);line-height:1.55;margin-bottom:12px}
 .scard .res{font-family:'Archivo';font-weight:800;font-size:21px;font-variant-numeric:tabular-nums;letter-spacing:-.5px;margin-top:10px}
 .scard .rsub{font-size:10px;color:var(--mut);margin-top:3px;line-height:1.5}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:5px;overflow:hidden;vertical-align:middle}
+.seg button{background:transparent;border:none;color:var(--mut);font-family:'JetBrains Mono';font-size:10px;font-weight:700;padding:4px 10px;cursor:pointer;letter-spacing:.5px}
+.seg button.on{background:var(--amber);color:#1a1200}
 </style>
 </head>
 <body>
@@ -174,11 +177,26 @@ function App(){
   const [gPT,setGPT]=useState(SAVED?.gPT??20);
   const [gRtp,setGR]=useState(SAVED?.gRtp??0.96);
   const [gClaim,setGC]=useState(SAVED?.gClaim??1);
+  const [cbRate,setCB]=useState(SAVED?.cbRate??0.20);
+  const [cbType,setCBT]=useState(SAVED?.cbType??'bonus');
+  const [mMatch,setMM]=useState(SAVED?.mMatch??1);
+  const [mDep,setMD]=useState(SAVED?.mDep??50);
+  const [mCap,setMC]=useState(SAVED?.mCap??100);
+  const [mPT,setMPT]=useState(SAVED?.mPT??20);
+  const [lootGated,setLG]=useState(SAVED?.lootGated??true);
+  const DEF_TIERS=[
+    {name:'Bronze',wagerReq:300,loot:150},
+    {name:'Silver',wagerReq:1300,loot:650},
+    {name:'Gold',wagerReq:4400,loot:2200},
+    {name:'Platinum',wagerReq:8000,loot:4000},
+    {name:'Diamond',wagerReq:23333,loot:11650},
+  ];
+  const [tiers,setTiers]=useState(SAVED?.tiers??DEF_TIERS);
   const [groups,setGroups]=useState(SAVED?.groups??DEF_GROUPS);
   const nextId=useRef((SAVED?.missions??SEED).reduce((mx,m)=>Math.max(mx,(m.id||0)+1),SEED.length));
 
-  useEffect(()=>{try{localStorage.setItem('xtp_console_v1',JSON.stringify({theme,coinPer1000,playthrough,rtp,missions,groups,earnerWager,stressEdge,stressPT,nPlayers,gAmt,gWin,gPT,gRtp,gClaim}));}catch(e){}},
-    [theme,coinPer1000,playthrough,rtp,missions,groups,earnerWager,stressEdge,stressPT,nPlayers,gAmt,gWin,gPT,gRtp,gClaim]);
+  useEffect(()=>{try{localStorage.setItem('xtp_console_v1',JSON.stringify({theme,coinPer1000,playthrough,rtp,missions,groups,earnerWager,stressEdge,stressPT,nPlayers,gAmt,gWin,gPT,gRtp,gClaim,cbRate,cbType,mMatch,mDep,mCap,mPT,lootGated,tiers}));}catch(e){}},
+    [theme,coinPer1000,playthrough,rtp,missions,groups,earnerWager,stressEdge,stressPT,nPlayers,gAmt,gWin,gPT,gRtp,gClaim,cbRate,cbType,mMatch,mDep,mCap,mPT,lootGated,tiers]);
 
   const edge=1-rtp;
   const factor=Math.max(0,1-(playthrough*edge));
@@ -202,7 +220,9 @@ function App(){
   const recurring=missions.filter(m=>m.group!=='npj');
   const weeklyCoins=recurring.reduce((s,m)=>s+(+m.coins||0)*(+m.days||0),0);
   const weeklyFace=weeklyCoins*coinFace, weeklyEff=weeklyFace*factor;
-  const weeklyRev=earnerWager*edge, weeklyNet=weeklyRev-weeklyEff;
+  const cbCostMult=cbType==='cash'?1:factor;          // cash refund costs full; bonus refund costs the WR factor
+  const effEdge=Math.max(0,edge-cbRate*edge*cbCostMult);
+  const weeklyRev=earnerWager*effEdge, weeklyNet=weeklyRev-weeklyEff;
 
   const reset=()=>{try{localStorage.removeItem('xtp_console_v1');}catch(e){}setM(SEED.map(m=>({...m})));setGroups(DEF_GROUPS.map(g=>({...g})));nextId.current=SEED.length;};
 
@@ -216,7 +236,10 @@ function App(){
       ['Game RTP',rtp],
       ['House edge',edge],
       ['Effective cost factor',factor],
-      ['Effective cost per coin ($)',costPerCoin],[],
+      ['Effective cost per coin ($)',costPerCoin],
+      ['Loss cashback rate',cbRate],
+      ['Cashback type',cbType],
+      ['Effective house edge after cashback',effEdge],[],
       ['SUMMARY'],
       ['New player — coins (one-time)',npjCoins],
       ['New player — face value ($)',npjCoins*coinFace],
@@ -268,6 +291,22 @@ function App(){
   const gTotalCost=gCostPer*gWin*gClaim;
   const gTotalWager=gReqWager*gWin*gClaim;
 
+  // ---- deposit match ----
+  const mBonus=Math.min(mDep*mMatch,mCap);
+  const mFactor=Math.max(0,1-mPT*edge);
+  const mReqW=mBonus*mPT;
+  const mWinBack=Math.min(mBonus,mReqW*edge);
+  const mCostPer=mBonus*mFactor;
+
+  // ---- loyalty tiers / daily loot ----
+  const tierRows=tiers.map(t=>{
+    const dailyFace=(+t.loot||0)*coinFace;
+    const dailyCost=dailyFace*factor;
+    const dailyRev=(+t.wagerReq||0)*effEdge;          // revenue if the tier wager happens that day
+    const dailyNet=dailyRev-dailyCost;                 // net when loot is wager-gated
+    return {...t,dailyCost,dailyRev,dailyNet,weekCost:dailyCost*7,yearCost:dailyCost*365};
+  });
+
   const Row=(m)=>{
     const r=rowsWith(m);
     return(<tr key={m.id}>
@@ -309,11 +348,17 @@ function App(){
         <Slider label="Coins per $10" val={coinPer1000} min={500} max={2000} step={50} onChange={setCoin} fmt={v=>v.toLocaleString()} hint={`Each coin = ${money2(coinFace)} face.`}/>
         <Slider label="Playthrough" val={playthrough} min={0} max={40} step={1} onChange={setPT} fmt={v=>v+'×'} hint="Higher = coins cost you less."/>
         <Slider label="Game RTP" val={rtp} min={0.90} max={0.995} step={0.005} onChange={setRtp} fmt={v=>pct(v)} hint={`House edge ${pct(edge)}.`}/>
+        <div className="ctrl">
+          <div className="crow"><span className="clabel">Loss cashback <span className="seg" style={{marginLeft:6}}><button className={cbType==='bonus'?'on':''} onClick={()=>setCBT('bonus')}>BONUS</button><button className={cbType==='cash'?'on':''} onClick={()=>setCBT('cash')}>CASH</button></span></span><span className="cval">{pct(cbRate)}</span></div>
+          <input type="range" min={0} max={0.30} step={0.01} value={cbRate} onChange={e=>setCB(parseFloat(e.target.value))}/>
+          <div className="chint">{cbType==='bonus'?`Paid as bonus with the playthrough — real cost ~${pct(cbRate*factor)} of losses.`:`Paid as withdrawable cash — costs the full ${pct(cbRate)} of losses and eats your edge.`}</div>
+        </div>
         <div className="kpi" style={{marginTop:4}}>
           <div className="cell"><div className="k">Cost / coin</div><div className="v" style={{color:'var(--amber)'}}>{money2(costPerCoin)}</div></div>
           <div className="cell"><div className="k">Cost factor</div><div className="v">{pct(factor,0)}</div></div>
-          <div className="cell"><div className="k">Face / coin</div><div className="v" style={{color:'var(--mut)'}}>{money2(coinFace)}</div></div>
+          <div className="cell"><div className="k">Edge after cashback</div><div className="v" style={{color:'var(--green)'}}>{pct(effEdge)}</div></div>
         </div>
+        <div className="chint" style={{marginTop:8}}>Your headline edge is {pct(edge)}, but after {pct(cbRate)} {cbType} cashback you really keep <b style={{color:'var(--green)'}}>{pct(effEdge)}</b> — that's the number every margin below is calculated on.</div>
       </div>
 
       <div className="panel">
@@ -421,6 +466,52 @@ function App(){
           </div>
 
         </div>
+      </div>
+
+      <div className="panel full">
+        <div className="ptitle">⑦ Deposit Match — for that second deposit</div>
+        <div className="psub">The classic second-deposit tool: "deposit again, we'll match it X% up to a cap." A one-off, capped, time-boxed match is fine (it's not the recurring escalating ladder). See what one conversion actually costs you.</div>
+        <div className="scards">
+          <div>
+            <Slider label="Match %" val={mMatch} min={0} max={2} step={0.1} onChange={setMM} fmt={v=>pct(v,0)} hint="100% = double their deposit; 50% = half."/>
+            <Slider label="Their deposit" val={mDep} min={0} max={500} step={5} onChange={setMD} fmt={v=>money(v)} hint="The second deposit you're trying to trigger."/>
+            <Slider label="Max match (cap)" val={mCap} min={0} max={500} step={5} onChange={setMC} fmt={v=>money(v)} hint="Ceiling on the bonus — controls your cost."/>
+            <Slider label="Playthrough on the match" val={mPT} min={0} max={40} step={1} onChange={setMPT} fmt={v=>v+'×'} hint={`They must wager ${money(mReqW)} to clear it.`}/>
+          </div>
+          <div>
+            <div className="res" style={{color:'var(--amber)',fontSize:30}}>{money2(mCostPer)}<span style={{fontSize:12,color:'var(--mut)',fontWeight:500}}> real cost per second deposit</span></div>
+            <div className="rsub" style={{marginBottom:14}}>{mFactor<=0?'The playthrough is expected to claw the whole match back — essentially self-funding.':`You advertise a ${pct(mMatch,0)} match, but only ${pct(mFactor,0)} of the bonus actually costs you.`}</div>
+            <div className="miscrow"><span className="ml">Bonus credited (capped)</span><span className="mv">{money2(mBonus)}</span></div>
+            <div className="miscrow"><span className="ml">They must wager (× {mPT})</span><span className="mv" style={{color:'var(--blue)'}}>{money2(mReqW)}</span></div>
+            <div className="miscrow"><span className="ml">You win back ({pct(edge)} edge)</span><span className="mv" style={{color:'var(--green)'}}>{money2(mWinBack)}</span></div>
+            <div className="miscrow"><span className="ml">= Real cost per conversion</span><span className="mv" style={{color:'var(--amber)'}}>{money2(mCostPer)}</span></div>
+            <div className="rsub" style={{marginTop:10}}>Plus the deposit itself ({money(mDep)}) gets played at your edge — so a converted second depositor is almost always net positive even before counting future deposits.</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel full">
+        <div className="ptitle">⑧ Loyalty Tiers &amp; Daily Loot Boxes <span className="seg" style={{marginLeft:8,fontSize:10}}><button className={lootGated?'on':''} onClick={()=>setLG(true)}>WAGER-GATED</button><button className={!lootGated?'on':''} onClick={()=>setLG(false)}>FREE DROP</button></span></div>
+        <div className="psub">Your daily loot scales with tier. The toggle is the key question: is the loot earned by hitting the tier's daily wager (then it's wildly self-funding), or handed out free for being in the tier (then it's pure cost a coasting player can farm)? Edit loot coins or wager req per tier.</div>
+        <table>
+          <thead><tr><th>Tier</th><th>Daily loot (coins)</th><th>Wager req</th><th>Loot cost /day</th><th>Loot cost /year</th><th>{lootGated?'Net /day (gated)':'Net /day'}</th><th>Verdict</th></tr></thead>
+          <tbody>
+          {tierRows.map((t,i)=>(
+            <tr key={i}>
+              <td>{t.name}</td>
+              <td><input className="numin" value={t.loot} onChange={e=>setTiers(ts=>ts.map((x,j)=>j===i?{...x,loot:e.target.value===''?0:parseInt(e.target.value)||0}:x))}/></td>
+              <td><input className="numin" value={t.wagerReq} onChange={e=>setTiers(ts=>ts.map((x,j)=>j===i?{...x,wagerReq:e.target.value===''?0:parseInt(e.target.value)||0}:x))}/></td>
+              <td style={{color:'var(--amber)'}}>{money2(t.dailyCost)}</td>
+              <td style={{color:'var(--mut)'}}>{money(t.yearCost)}</td>
+              <td style={{color:(lootGated?t.dailyNet:-t.dailyCost)>=0?'var(--green)':'var(--red)',fontWeight:600}}>{money2(lootGated?t.dailyNet:-t.dailyCost)}</td>
+              <td><span className={"badge "+((lootGated?t.dailyNet:-t.dailyCost)>=0?'b-ok':'b-bad')}>{(lootGated?t.dailyNet:-t.dailyCost)>=0?'PROFIT':'LOSS'}</span></td>
+            </tr>
+          ))}
+          </tbody>
+        </table>
+        <div className="chint" style={{marginTop:12}}>{lootGated
+          ? `Wager-gated: a player must wager the tier amount that day to claim, so the loot is funded many times over by the edge on that turnover — every tier is green. This is how it should be set up.`
+          : `Free drop: the loot is handed out just for being in the tier. A Diamond player who reaches the tier and then coasts costs you ${money(tierRows[tierRows.length-1]?.yearCost||0)}/year for nothing. If loot isn't gated on daily play, add tier decay or a daily-wager condition.`}</div>
       </div>
     </div>
 
